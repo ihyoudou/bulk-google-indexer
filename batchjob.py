@@ -2,14 +2,20 @@ from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build 
 from googleapiclient.http import BatchHttpRequest
 import httplib2
+import sqlite3
 import json
+import time
 import requests
 
-MaxURL = 200
+MaxURL = 1
 URLlist = {}
 err = False
 JSON_KEY_FILE = "credentials.json"
 DiscordWebhookURL = ""
+
+con = sqlite3.connect('sqlite3.db')
+cur = con.cursor()
+
 
 # https://gist.github.com/Bilka2/5dd2ca2b6e9f3573e0c2defe5d3031b2
 def sendDiscordWebhook(msg):
@@ -31,20 +37,15 @@ def sendDiscordWebhook(msg):
             print("Payload delivered successfully, code {}.".format(result.status_code))
 
         
-# loading urls.txt file to dictionary
-
-with open("urls.txt", "r") as file:  # the a opens it in append mode
-    for i in range(MaxURL):
-        try:
-            line = next(file).strip()
-            print(line)
-            URLlist[str(line)] = 'URL_UPDATED'
-        except Exception as e:
-            sendDiscordWebhook("cannot load text file: {}".format(e))
-            err = True
+# loading urls that haven't been checked
+cur.execute('''SELECT url FROM urls WHERE processed_at IS NULL LIMIT ?''', (MaxURL,))
+rows = cur.fetchall()
+for row in rows:
+    URLlist[str(row[0])] = 'URL_UPDATED'
 
 
 # https://www.jcchouinard.com/google-indexing-api-with-python/
+
 SCOPES = [ "https://www.googleapis.com/auth/indexing" ]
 ENDPOINT = "https://indexing.googleapis.com/v3/urlNotifications:publish"
  
@@ -68,27 +69,12 @@ batch = service.new_batch_http_request(callback=insert_event)
 for url, api_type in URLlist.items():
     batch.add(service.urlNotifications().publish(
         body={"url": url, "type": api_type}))
- 
+    cur.execute("UPDATE urls SET processed_at=? WHERE url=?",(time.time(), url))
+
 batch.execute()
 
+con.commit()
+con.close()
 
-# after _probably_ successful batch run, removing urls from file
-if not err:
-    try:
-        with open('urls.txt') as f:
-            lines = f.readlines()
-
-        def remove_n_lines_from_top(lines, n):
-            if n <= len(lines):
-                return lines[n:]
-            else:
-                return lines
-
-        lines = remove_n_lines_from_top(lines, MaxURL)
-
-        f = open("urls.txt", "w+") # replace new file
-        f.writelines(lines)
-        f.close()
-        sendDiscordWebhook("Batch job completed! URL's: {}".format(URLlist))
-    except Exception as e:
-        sendDiscordWebhook("error while removing links from text file: {}".format(e))
+sendDiscordWebhook("Batch job completed!")
+    
